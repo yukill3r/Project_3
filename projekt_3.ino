@@ -1,14 +1,14 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 #include <ArduinoJson.h>
+#include <Wire.h> 
+#include <LiquidCrystal_I2C.h>
 
-const char* ssid = "x";
-const char* password = "x";
-
-ESP8266WebServer server(80);
+const char* ssid = "Cirno";
+const char* password = "bakabaka";
 
 const int potPin = A0;
-const int ledPin = D1;
+const int ledPin = D5;
 
 double y = 0.0;
 double T = 0.5;
@@ -23,6 +23,9 @@ double setpoint = 0;
 double integral = 0;
 double last_error = 0;
 double u = 0;
+
+ESP8266WebServer server(80);
+LiquidCrystal_I2C lcd(0x3F, 16, 2);
 
 double f(double u_in) {
     if (u_in < 200) return 0.03 * u_in;
@@ -95,7 +98,7 @@ void handleData() {
     StaticJsonDocument<256> doc;
     doc["sp"] = setpoint;
     doc["y"] = y;
-    doc["u"] = u / 6.8; // Skalowanie do wykresu
+    doc["u"] = u / 6.8; 
     doc["kp"] = Kp;
     doc["ki"] = Ki;
     doc["kd"] = Kd;
@@ -116,10 +119,23 @@ void setup() {
     Serial.begin(115200);
     pinMode(ledPin, OUTPUT);
     
+    lcd.init();
+    lcd.backlight();
+    lcd.setCursor(0, 0);
+    lcd.print("WiFi Connecting");
+
     WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
-    Serial.println("\nPołączono!");
-    Serial.println("IP: " + WiFi.localIP().toString());
+    while (WiFi.status() != WL_CONNECTED) { 
+        delay(500); 
+        Serial.print("."); 
+    }
+    
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("IP Address:");
+    lcd.setCursor(0, 1);
+    lcd.print(WiFi.localIP());
+    delay(2000);
 
     server.on("/", handleRoot);
     server.on("/data", handleData);
@@ -131,6 +147,8 @@ void loop() {
     server.handleClient();
 
     static uint32_t lastMillis = 0;
+    static uint32_t lastLcdMillis = 0;
+
     if (millis() - lastMillis >= (uint32_t)(dt * 1000)) {
         lastMillis = millis();
 
@@ -157,5 +175,18 @@ void loop() {
         Serial.print("SP:"); Serial.print(setpoint); Serial.print(",");
         Serial.print("Y:"); Serial.print(y); Serial.print(",");
         Serial.print("U_scaled:"); Serial.println(u / 6.8);
+    }
+
+    if (millis() - lastLcdMillis >= 250) {
+        lastLcdMillis = millis();
+        lcd.setCursor(0, 0);
+        lcd.print("S:"); lcd.print((int)setpoint);
+        lcd.print(" Y:"); lcd.print(y, 1);
+        lcd.print("   ");
+
+        lcd.setCursor(0, 1);
+        lcd.print("P:"); lcd.print(Kp, 1);
+        lcd.print("I:"); lcd.print(Ki, 1);
+        lcd.print("D:"); lcd.print(Kd, 1);
     }
 }
