@@ -121,7 +121,7 @@ void loop() {
 
         analogWrite(ledPin, (int)u);
 
-        loopTime = (micros() - start) / 1000;
+        loopTime = (micros() - start);
 
         if (millis() - lastLcdUpdate >= 250) {
             lastLcdUpdate = millis();
