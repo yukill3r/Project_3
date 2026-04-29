@@ -53,13 +53,16 @@ const char INDEX_HTML[] PROGMEM =
 "Kd: <span id='cur_kd' class='val'>-</span> dt: <span id='cur_dt' class='val'>-</span>s</div>"
 "<div>Kp: <input type='number' id='kp' value='1.75' step='0.1'> Ki: <input type='number' id='ki' value='0.5' step='0.1'> "
 "Kd: <input type='number' id='kd' value='0.0' step='0.1'> dt: <input type='number' id='dt' value='0.02' step='0.01'> "
-"<button onclick='sendPID()'>Zapisz Nastawy</button></div></div>"
+"<button onclick='sendPID()'>Zapisz Nastawy</button> "
+"<button onclick='crashBoard()' style='background:#dc3545;'>Crash Board</button></div></div>"
 "<script>var traces=[{y:[],name:'SP'},{y:[],name:'Y'},{y:[],name:'U'}]; Plotly.newPlot('chart',traces,{margin:{t:20}});"
 "function getData(){fetch('/data').then(r=>r.json()).then(d=>{Plotly.extendTraces('chart',{y:[[d.sp],[d.y],[d.u]]},[0,1,2],100);"
 "document.getElementById('val_sp').innerText=d.sp.toFixed(1);document.getElementById('val_y').innerText=d.y.toFixed(1);document.getElementById('val_u').innerText=d.u.toFixed(1);document.getElementById('val_lt').innerText=d.lt;"
 "document.getElementById('cur_kp').innerText=d.kp.toFixed(2);document.getElementById('cur_ki').innerText=d.ki.toFixed(2);document.getElementById('cur_kd').innerText=d.kd.toFixed(2);document.getElementById('cur_dt').innerText=d.dt.toFixed(3);});}"
 "function sendPID(){var p='kp='+document.getElementById('kp').value+'&ki='+document.getElementById('ki').value+'&kd='+document.getElementById('kd').value+'&dt='+document.getElementById('dt').value;"
-"fetch('/setpid?'+p);} setInterval(getData,100);</script></body></html>";
+"fetch('/setpid?'+p);}"
+"function crashBoard(){fetch('/crash');}"
+"setInterval(getData,100);</script></html>";
 
 void handleData() {
     StaticJsonDocument<300> doc;
@@ -85,9 +88,16 @@ void setup() {
     lcd.init(); lcd.backlight();
     WiFi.begin(ssid, password);
     while (WiFi.status() != WL_CONNECTED) delay(500);
+    
     server.on("/", [](){ server.send(200, "text/html", INDEX_HTML); });
     server.on("/data", handleData);
     server.on("/setpid", handleSetPID);
+    server.on("/crash", [](){
+        server.send(200, "text/plain", "System zablokowany. Czekaj na restart WDT...");
+        Serial.println("CRASH TEST START...");
+        while(1) { /* Pętla blokująca - WDT zareaguje */ }
+    });
+    
     server.begin();
 }
 
@@ -134,4 +144,5 @@ void loop() {
         }
     }
     server.handleClient();
+    yield(); // Karmienie Watchdoga programowego
 }
