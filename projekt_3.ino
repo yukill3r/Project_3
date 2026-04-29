@@ -9,18 +9,13 @@ const char* password = "bakabaka";
 
 const int potPin = A0;
 const int ledPin = D5;
+const int modeButtonPin = D6; 
 
-double y = 0.0;
-double u = 0.0;
-double T = 0.5;
-double dt = 0.02;
-double alpha = dt / T;
+double y = 0.0, u = 0.0, T = 0.5, dt = 0.02, alpha = dt / T;
+double Kp = 1.75, Ki = 0.5, Kd = 0.005, setpoint = 0, integral = 0, last_error = 0;
 
-double Kp = 1.2, Ki = 0.5, Kd = 0.1;
-double setpoint = 0;
-double integral = 0;
-double last_error = 0;
-
+bool isAuto = true;
+double manualY = 0;
 unsigned long loopTime = 0;
 
 ESP8266WebServer server(80);
@@ -48,27 +43,27 @@ const char INDEX_HTML[] PROGMEM =
 ".val{font-weight:bold; color:#007bff; margin-right:15px;} input{width:60px; padding:5px; margin:5px;} "
 "button{padding:6px 15px; cursor:pointer; background:#28a745; color:white; border:none; border-radius:3px;}</style></head>"
 "<body><div class='container'><h2>System Regulacji PID</h2><div id='chart'></div>"
-"<div class='stats'><b>Wartości:</b> SP: <span id='val_sp' class='val'>-</span> Y: <span id='val_y' class='val'>-</span> U: <span id='val_u' class='val'>-</span> | Loop: <span id='val_lt' class='val'>-</span>μs</div>"
-"<div class='stats'><b>Nastawy:</b> Kp: <span id='cur_kp' class='val'>-</span> Ki: <span id='cur_ki' class='val'>-</span> "
-"Kd: <span id='cur_kd' class='val'>-</span> dt: <span id='cur_dt' class='val'>-</span>s</div>"
-"<div>Kp: <input type='number' id='kp' value='1.75' step='0.1'> Ki: <input type='number' id='ki' value='0.5' step='0.1'> "
-"Kd: <input type='number' id='kd' value='0.0' step='0.1'> dt: <input type='number' id='dt' value='0.02' step='0.01'> "
-"<button onclick='sendPID()'>Zapisz Nastawy</button> "
+"<div class='stats'><b>Wartości:</b> Mode: <span id='mode' class='val'>-</span> SP: <span id='val_sp' class='val'>-</span> Y: <span id='val_y' class='val'>-</span> U: <span id='val_u' class='val'>-</span> | Loop: <span id='val_lt' class='val'>-</span>μs</div>"
+"<div class='stats'><b>Nastawy:</b> Kp: <span id='cur_kp' class='val'>-</span> Ki: <span id='cur_ki' class='val'>-</span> Kd: <span id='cur_kd' class='val'>-</span> dt: <span id='cur_dt' class='val'>-</span>s</div>"
+"<div>Kp: <input type='number' id='kp' value='1.2' step='0.1'> Ki: <input type='number' id='ki' value='0.5' step='0.1'> "
+"Kd: <input type='number' id='kd' value='0.1' step='0.1'> dt: <input type='number' id='dt' value='0.02' step='0.01'> "
+"<button onclick='sendPID()'>Zapisz Nastawy</button></div>"
+"<div>Manual Y (0-150): <input type='number' id='my' value='0' oninput='sendMan()'> "
 "<button onclick='crashBoard()' style='background:#dc3545;'>Crash Board</button></div></div>"
 "<script>var traces=[{y:[],name:'SP'},{y:[],name:'Y'},{y:[],name:'U'}]; Plotly.newPlot('chart',traces,{margin:{t:20}});"
 "function getData(){fetch('/data').then(r=>r.json()).then(d=>{Plotly.extendTraces('chart',{y:[[d.sp],[d.y],[d.u]]},[0,1,2],100);"
 "document.getElementById('val_sp').innerText=d.sp.toFixed(1);document.getElementById('val_y').innerText=d.y.toFixed(1);document.getElementById('val_u').innerText=d.u.toFixed(1);document.getElementById('val_lt').innerText=d.lt;"
-"document.getElementById('cur_kp').innerText=d.kp.toFixed(2);document.getElementById('cur_ki').innerText=d.ki.toFixed(2);document.getElementById('cur_kd').innerText=d.kd.toFixed(2);document.getElementById('cur_dt').innerText=d.dt.toFixed(3);});}"
+"document.getElementById('cur_kp').innerText=d.kp.toFixed(2);document.getElementById('cur_ki').innerText=d.ki.toFixed(2);document.getElementById('cur_kd').innerText=d.kd.toFixed(2);document.getElementById('cur_dt').innerText=d.dt.toFixed(3);"
+"document.getElementById('mode').innerText=d.mode;});}"
 "function sendPID(){var p='kp='+document.getElementById('kp').value+'&ki='+document.getElementById('ki').value+'&kd='+document.getElementById('kd').value+'&dt='+document.getElementById('dt').value;"
-"fetch('/setpid?'+p);}"
-"function crashBoard(){fetch('/crash');}"
-"setInterval(getData,100);</script></html>";
+"fetch('/setpid?'+p);} function sendMan(){fetch('/setpid?manualY='+document.getElementById('my').value);}"
+"function crashBoard(){fetch('/crash');} setInterval(getData,100);</script></html>";
 
 void handleData() {
     StaticJsonDocument<300> doc;
     doc["sp"] = setpoint; doc["y"] = y; doc["u"] = u;
     doc["kp"] = Kp; doc["ki"] = Ki; doc["kd"] = Kd; doc["dt"] = dt;
-    doc["lt"] = loopTime;
+    doc["lt"] = loopTime; doc["mode"] = isAuto ? "AUTO" : "MAN Y";
     String json; serializeJson(doc, json);
     server.send(200, "application/json", json);
 }
@@ -78,6 +73,7 @@ void handleSetPID() {
     if(server.hasArg("ki")) Ki = server.arg("ki").toDouble();
     if(server.hasArg("kd")) Kd = server.arg("kd").toDouble();
     if(server.hasArg("dt")) { dt = server.arg("dt").toDouble(); alpha = dt / T; }
+    if(server.hasArg("manualY")) { manualY = server.arg("manualY").toDouble(); isAuto = false; }
     server.send(200, "text/plain", "OK");
 }
 
@@ -85,6 +81,7 @@ void setup() {
     system_update_cpu_freq(160);
     Serial.begin(115200);
     pinMode(ledPin, OUTPUT);
+    pinMode(modeButtonPin, INPUT_PULLUP);
     lcd.init(); lcd.backlight();
     WiFi.begin(ssid, password);
     while (WiFi.status() != WL_CONNECTED) delay(500);
@@ -97,52 +94,45 @@ void setup() {
         Serial.println("CRASH TEST START...");
         while(1) { /* Pętla blokująca - WDT zareaguje */ }
     });
-    
     server.begin();
 }
 
 void loop() {
-    static uint32_t lastMillis = 0;
-    static uint32_t lastLcdUpdate = 0;
+    static uint32_t lastMillis = 0, lastLcdUpdate = 0;
+    static bool lastBtn = HIGH;
+
+    bool btn = digitalRead(modeButtonPin);
+    if (btn == LOW && lastBtn == HIGH) { isAuto = !isAuto; delay(50); }
+    lastBtn = btn;
 
     if (millis() - lastMillis >= (dt * 1000)) {
         unsigned long start = micros();
-        
         lastMillis = millis();
         setpoint = analogRead(potPin) / 1023.0 * 150.0;
         
-        if (setpoint > 150) setpoint = 150;
-        if (setpoint < 0) setpoint = 0;
-
-        double error = setpoint - y;
-        integral += error * dt;
-        double derivative = (error - last_error) / dt;
-        
-        u = Kp * error + Ki * integral + Kd * derivative;
-        
-        if (u > 1023) u = 1023;
-        if (u < 0) u = 0;
-        
-        last_error = error;
-        y = updatePlant(u);
-        
-        if (y > 150) y = 150;
-        if (y < 0) y = 0;
+        if (isAuto) {
+            double error = setpoint - y;
+            integral += error * dt;
+            double derivative = (error - last_error) / dt;
+            u = Kp * error + Ki * integral + Kd * derivative;
+            last_error = error;
+            if (u > 1023) u = 1023; if (u < 0) u = 0;
+            y = updatePlant(u);
+        } else {
+            y = manualY; u = 0; integral = 0; last_error = 0;
+        }
 
         analogWrite(ledPin, (int)u);
-
         loopTime = (micros() - start);
 
         if (millis() - lastLcdUpdate >= 250) {
             lastLcdUpdate = millis();
-            lcd.setCursor(0, 0);
-            lcd.print("SP:"); lcd.print((int)setpoint); lcd.print(" Y:"); lcd.print((int)y);
-            lcd.print("    ");
-            lcd.setCursor(0, 1);
-            lcd.print("U:"); lcd.print((int)u); lcd.print(" LT:"); lcd.print(loopTime);
-            lcd.print("ms   ");
+            lcd.setCursor(0, 0); lcd.print(isAuto ? "AUTO " : "MAN Y");
+            lcd.print(" SP:"); lcd.print((int)setpoint); lcd.print(" Y:"); lcd.print((int)y);
+            lcd.setCursor(0, 1); lcd.print("U:"); lcd.print((int)u); lcd.print(" LT:"); lcd.print(loopTime);
+            lcd.print("us    ");
         }
     }
     server.handleClient();
-    yield(); // Karmienie Watchdoga programowego
+    yield();
 }
