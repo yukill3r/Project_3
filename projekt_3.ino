@@ -15,7 +15,7 @@ double y = 0.0, u = 0.0, T = 0.5, dt = 0.02, alpha = dt / T;
 double Kp = 1.75, Ki = 0.5, Kd = 0.005, setpoint = 0, integral = 0, last_error = 0;
 
 bool isAuto = true;
-double manualY = 0;
+double manualU = 0;
 unsigned long loopTime = 0;
 
 ESP8266WebServer server(80);
@@ -48,7 +48,7 @@ const char INDEX_HTML[] PROGMEM =
 "<div>Kp: <input type='number' id='kp' value='1.2' step='0.1'> Ki: <input type='number' id='ki' value='0.5' step='0.1'> "
 "Kd: <input type='number' id='kd' value='0.1' step='0.1'> dt: <input type='number' id='dt' value='0.02' step='0.01'> "
 "<button onclick='sendPID()'>Zapisz Nastawy</button></div>"
-"<div>Manual Y (0-150): <input type='number' id='my' value='0' oninput='sendMan()'> "
+"<div>Manual U (0-1023): <input type='number' id='mu' value='0' oninput='sendMan()'> "
 "<button onclick='crashBoard()' style='background:#dc3545;'>Crash Board</button></div></div>"
 "<script>var traces=[{y:[],name:'SP'},{y:[],name:'Y'},{y:[],name:'U'}]; Plotly.newPlot('chart',traces,{margin:{t:20}});"
 "function getData(){fetch('/data').then(r=>r.json()).then(d=>{Plotly.extendTraces('chart',{y:[[d.sp],[d.y],[d.u]]},[0,1,2],100);"
@@ -56,14 +56,14 @@ const char INDEX_HTML[] PROGMEM =
 "document.getElementById('cur_kp').innerText=d.kp.toFixed(2);document.getElementById('cur_ki').innerText=d.ki.toFixed(2);document.getElementById('cur_kd').innerText=d.kd.toFixed(2);document.getElementById('cur_dt').innerText=d.dt.toFixed(3);"
 "document.getElementById('mode').innerText=d.mode;});}"
 "function sendPID(){var p='kp='+document.getElementById('kp').value+'&ki='+document.getElementById('ki').value+'&kd='+document.getElementById('kd').value+'&dt='+document.getElementById('dt').value;"
-"fetch('/setpid?'+p);} function sendMan(){fetch('/setpid?manualY='+document.getElementById('my').value);}"
+"fetch('/setpid?'+p);} function sendMan(){fetch('/setpid?manualU='+document.getElementById('mu').value);}"
 "function crashBoard(){fetch('/crash');} setInterval(getData,100);</script></html>";
 
 void handleData() {
     StaticJsonDocument<300> doc;
     doc["sp"] = setpoint; doc["y"] = y; doc["u"] = u;
     doc["kp"] = Kp; doc["ki"] = Ki; doc["kd"] = Kd; doc["dt"] = dt;
-    doc["lt"] = loopTime; doc["mode"] = isAuto ? "AUTO" : "MAN Y";
+    doc["lt"] = loopTime; doc["mode"] = isAuto ? "AUTO" : "MAN U";
     String json; serializeJson(doc, json);
     server.send(200, "application/json", json);
 }
@@ -73,7 +73,7 @@ void handleSetPID() {
     if(server.hasArg("ki")) Ki = server.arg("ki").toDouble();
     if(server.hasArg("kd")) Kd = server.arg("kd").toDouble();
     if(server.hasArg("dt")) { dt = server.arg("dt").toDouble(); alpha = dt / T; }
-    if(server.hasArg("manualY")) { manualY = server.arg("manualY").toDouble(); isAuto = false; }
+    if(server.hasArg("manualU")) { manualU = server.arg("manualU").toDouble(); isAuto = false; }
     server.send(200, "text/plain", "OK");
 }
 
@@ -92,7 +92,7 @@ void setup() {
     server.on("/crash", [](){
         server.send(200, "text/plain", "System zablokowany. Czekaj na restart WDT...");
         Serial.println("CRASH TEST START...");
-        while(1) { /* Pętla blokująca - WDT zareaguje */ }
+        while(1) { yield(); }
     });
     server.begin();
 }
@@ -116,18 +116,22 @@ void loop() {
             double derivative = (error - last_error) / dt;
             u = Kp * error + Ki * integral + Kd * derivative;
             last_error = error;
-            if (u > 1023) u = 1023; if (u < 0) u = 0;
-            y = updatePlant(u);
         } else {
-            y = manualY; u = 0; integral = 0; last_error = 0;
+            u = manualU;
+            integral = 0;
+            last_error = 0;
         }
+
+        if (u > 1023) u = 1023; if (u < 0) u = 0;
+        
+        y = updatePlant(u);
 
         analogWrite(ledPin, (int)u);
         loopTime = (micros() - start);
 
         if (millis() - lastLcdUpdate >= 250) {
             lastLcdUpdate = millis();
-            lcd.setCursor(0, 0); lcd.print(isAuto ? "AUTO " : "MAN Y");
+            lcd.setCursor(0, 0); lcd.print(isAuto ? "AUTO " : "MAN U");
             lcd.print(" SP:"); lcd.print((int)setpoint); lcd.print(" Y:"); lcd.print((int)y);
             lcd.setCursor(0, 1); lcd.print("U:"); lcd.print((int)u); lcd.print(" LT:"); lcd.print(loopTime);
             lcd.print("us    ");
