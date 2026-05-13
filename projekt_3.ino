@@ -15,20 +15,21 @@ double y = 0.0, u = 0.0, T = 0.5, dt = 0.02, alpha = dt / T;
 double Kp = 1.75, Ki = 0.5, Kd = 0.005, setpoint = 0, integral = 0, last_error = 0;
 
 bool isAuto = true;
-double manualU = 0;
+bool lastIsAuto = true;
+double manualU = 0; 
 unsigned long loopTime = 0;
 
 ESP8266WebServer server(80);
 LiquidCrystal_I2C lcd(0x3F, 16, 2);
 
-double f(double u) {
-    if (u < 200) return 0.03 * u;
-    if (u < 700) return 0.25 * u - 40;
-    return 140 + 0.05 * (u - 700);
+double f(double u_val) {
+    if (u_val < 200) return 0.03 * u_val;
+    if (u_val < 700) return 0.25 * u_val - 40;
+    return 140 + 0.05 * (u_val - 700);
 }
 
-double updatePlant(double u) {
-    double target = f(u);
+double updatePlant(double u_val) {
+    double target = f(u_val);
     y = y + alpha * (target - y);
     return y;
 }
@@ -44,16 +45,14 @@ const char INDEX_HTML[] PROGMEM =
 "button{padding:6px 15px; cursor:pointer; background:#28a745; color:white; border:none; border-radius:3px;}</style></head>"
 "<body><div class='container'><h2>System Regulacji PID</h2><div id='chart'></div>"
 "<div class='stats'><b>Wartości:</b> Mode: <span id='mode' class='val'>-</span> SP: <span id='val_sp' class='val'>-</span> Y: <span id='val_y' class='val'>-</span> U: <span id='val_u' class='val'>-</span> | Loop: <span id='val_lt' class='val'>-</span>μs</div>"
-"<div class='stats'><b>Nastawy:</b> Kp: <span id='cur_kp' class='val'>-</span> Ki: <span id='cur_ki' class='val'>-</span> Kd: <span id='cur_kd' class='val'>-</span> dt: <span id='cur_dt' class='val'>-</span>s</div>"
-"<div>Kp: <input type='number' id='kp' value='1.2' step='0.1'> Ki: <input type='number' id='ki' value='0.5' step='0.1'> "
-"Kd: <input type='number' id='kd' value='0.1' step='0.1'> dt: <input type='number' id='dt' value='0.02' step='0.01'> "
+"<div>Kp: <input type='number' id='kp' value='1.75' step='0.1'> Ki: <input type='number' id='ki' value='0.5' step='0.1'> "
+"Kd: <input type='number' id='kd' value='0.005' step='0.001'> dt: <input type='number' id='dt' value='0.02' step='0.01'> "
 "<button onclick='sendPID()'>Zapisz Nastawy</button></div>"
 "<div>Manual U (0-1023): <input type='number' id='mu' value='0' oninput='sendMan()'> "
 "<button onclick='crashBoard()' style='background:#dc3545;'>Crash Board</button></div></div>"
 "<script>var traces=[{y:[],name:'SP'},{y:[],name:'Y'},{y:[],name:'U'}]; Plotly.newPlot('chart',traces,{margin:{t:20}});"
 "function getData(){fetch('/data').then(r=>r.json()).then(d=>{Plotly.extendTraces('chart',{y:[[d.sp],[d.y],[d.u]]},[0,1,2],100);"
 "document.getElementById('val_sp').innerText=d.sp.toFixed(1);document.getElementById('val_y').innerText=d.y.toFixed(1);document.getElementById('val_u').innerText=d.u.toFixed(1);document.getElementById('val_lt').innerText=d.lt;"
-"document.getElementById('cur_kp').innerText=d.kp.toFixed(2);document.getElementById('cur_ki').innerText=d.ki.toFixed(2);document.getElementById('cur_kd').innerText=d.kd.toFixed(2);document.getElementById('cur_dt').innerText=d.dt.toFixed(3);"
 "document.getElementById('mode').innerText=d.mode;});}"
 "function sendPID(){var p='kp='+document.getElementById('kp').value+'&ki='+document.getElementById('ki').value+'&kd='+document.getElementById('kd').value+'&dt='+document.getElementById('dt').value;"
 "fetch('/setpid?'+p);} function sendMan(){fetch('/setpid?manualU='+document.getElementById('mu').value);}"
@@ -90,8 +89,7 @@ void setup() {
     server.on("/data", handleData);
     server.on("/setpid", handleSetPID);
     server.on("/crash", [](){
-        server.send(200, "text/plain", "System zablokowany. Czekaj na restart WDT...");
-        Serial.println("CRASH TEST START...");
+        server.send(200, "text/plain", "Zablokowano.");
         while(1) { yield(); }
     });
     server.begin();
@@ -99,34 +97,40 @@ void setup() {
 
 void loop() {
     static uint32_t lastMillis = 0, lastLcdUpdate = 0;
-    static bool lastBtn = HIGH;
+    static bool btnState = HIGH;
 
     bool btn = digitalRead(modeButtonPin);
-    if (btn == LOW && lastBtn == HIGH) { isAuto = !isAuto; delay(50); }
-    lastBtn = btn;
+    if (btn == LOW && btnState == HIGH) { isAuto = !isAuto; delay(50); }
+    btnState = btn;
 
     if (millis() - lastMillis >= (dt * 1000)) {
         unsigned long start = micros();
         lastMillis = millis();
         setpoint = analogRead(potPin) / 1023.0 * 150.0;
-        
+        double error = setpoint - y;
+
+        if (isAuto && !lastIsAuto) {
+            integral = 0;
+            last_error = error;
+        }
+        lastIsAuto = isAuto;
+
         if (isAuto) {
-            double error = setpoint - y;
             integral += error * dt;
             double derivative = (error - last_error) / dt;
             u = Kp * error + Ki * integral + Kd * derivative;
             last_error = error;
         } else {
             u = manualU;
-            integral = 0;
-            last_error = 0;
+            integral = 0; 
+            last_error = error;
         }
 
         if (u > 1023) u = 1023; if (u < 0) u = 0;
         
         y = updatePlant(u);
-
         analogWrite(ledPin, (int)u);
+        
         loopTime = (micros() - start);
 
         if (millis() - lastLcdUpdate >= 250) {
